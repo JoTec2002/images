@@ -29,6 +29,98 @@ jobs:
           repository: ${{ env.UPSTREAM_REPO }}
           ref: ${{ inputs.ref }}
 
+      - name: Inject baseline Prisma migration
+        run: |
+          # The super-sync-server was bootstrapped with `prisma db push`, so there is no
+          # initial CREATE TABLE migration. Without this baseline, `prisma migrate deploy`
+          # (run in the container CMD) fails on a fresh database because all existing
+          # migrations are ALTER TABLE statements that assume the tables already exist.
+          mkdir -p packages/super-sync-server/prisma/migrations/20200101000000_init
+          cat > packages/super-sync-server/prisma/migrations/20200101000000_init/migration.sql << 'SQLEOF'
+          -- Baseline migration: create initial schema
+          -- Tables were originally created via `prisma db push` (no migration file was generated).
+          -- This file establishes the schema state that existed before the first incremental migration.
+
+          CREATE TABLE "users" (
+              "id" SERIAL NOT NULL,
+              "email" TEXT NOT NULL,
+              "password_hash" TEXT NOT NULL,
+              "is_verified" INTEGER NOT NULL DEFAULT 0,
+              "verification_token" TEXT,
+              "verification_token_expires_at" BIGINT,
+              "verification_resend_count" INTEGER NOT NULL DEFAULT 0,
+              "login_token" TEXT,
+              "login_token_expires_at" BIGINT,
+              "failed_login_attempts" INTEGER NOT NULL DEFAULT 0,
+              "locked_until" BIGINT,
+              "token_version" INTEGER NOT NULL DEFAULT 0,
+              "terms_accepted_at" BIGINT,
+              "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+              CONSTRAINT "users_pkey" PRIMARY KEY ("id")
+          );
+
+          CREATE UNIQUE INDEX "users_email_key" ON "users"("email");
+          CREATE INDEX "users_verification_token_idx" ON "users"("verification_token");
+          CREATE INDEX "users_login_token_idx" ON "users"("login_token");
+
+          CREATE TABLE "operations" (
+              "id" TEXT NOT NULL,
+              "user_id" INTEGER NOT NULL,
+              "client_id" TEXT NOT NULL,
+              "server_seq" INTEGER NOT NULL,
+              "action_type" TEXT NOT NULL,
+              "op_type" TEXT NOT NULL,
+              "entity_type" TEXT NOT NULL,
+              "entity_id" TEXT,
+              "payload" JSONB NOT NULL,
+              "vector_clock" JSONB NOT NULL,
+              "schema_version" INTEGER NOT NULL,
+              "client_timestamp" BIGINT NOT NULL,
+              "received_at" BIGINT NOT NULL,
+
+              CONSTRAINT "operations_pkey" PRIMARY KEY ("id")
+          );
+
+          CREATE UNIQUE INDEX "operations_user_id_server_seq_key" ON "operations"("user_id", "server_seq");
+          CREATE INDEX "operations_user_id_server_seq_idx" ON "operations"("user_id", "server_seq");
+          CREATE INDEX "operations_user_id_entity_type_entity_id_idx" ON "operations"("user_id", "entity_type", "entity_id");
+          CREATE INDEX "operations_user_id_client_id_idx" ON "operations"("user_id", "client_id");
+          CREATE INDEX "operations_user_id_received_at_idx" ON "operations"("user_id", "received_at");
+
+          CREATE TABLE "user_sync_state" (
+              "user_id" INTEGER NOT NULL,
+              "last_seq" INTEGER NOT NULL DEFAULT 0,
+              "last_snapshot_seq" INTEGER,
+              "snapshot_data" BYTEA,
+              "snapshot_at" BIGINT,
+              "snapshot_schema_version" INTEGER DEFAULT 1,
+
+              CONSTRAINT "user_sync_state_pkey" PRIMARY KEY ("user_id")
+          );
+
+          CREATE TABLE "sync_devices" (
+              "client_id" TEXT NOT NULL,
+              "user_id" INTEGER NOT NULL,
+              "device_name" TEXT,
+              "user_agent" TEXT,
+              "last_seen_at" BIGINT NOT NULL,
+              "last_acked_seq" INTEGER NOT NULL DEFAULT 0,
+              "created_at" BIGINT NOT NULL,
+
+              CONSTRAINT "sync_devices_pkey" PRIMARY KEY ("user_id", "client_id")
+          );
+
+          ALTER TABLE "operations" ADD CONSTRAINT "operations_user_id_fkey"
+              FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+          ALTER TABLE "user_sync_state" ADD CONSTRAINT "user_sync_state_user_id_fkey"
+              FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+          ALTER TABLE "sync_devices" ADD CONSTRAINT "sync_devices_user_id_fkey"
+              FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+          SQLEOF
+
       - name: Compute image tags
         id: tags
         run: |
