@@ -1,11 +1,13 @@
 name: Super Sync
 
 on:
+  schedule:
+    - cron: '0 * * * *'
   workflow_dispatch:
     inputs:
       ref:
-        description: "Git tag or commit ref from super-productivity repo"
-        required: true
+        description: "Git tag or commit ref from super-productivity repo (leave blank for latest release)"
+        required: false
         type: string
 
 env:
@@ -23,13 +25,42 @@ jobs:
       id-token: write
 
     steps:
+      - name: Get Latest Upstream Release
+        id: upstream
+        run: |
+          # If manual input is provided, use it. Otherwise, fetch the latest release tag from API.
+          if [ -n "${{ inputs.ref }}" ]; then
+            echo "RELEASE_TAG=${{ inputs.ref }}" >> $GITHUB_OUTPUT
+          else
+            LATEST_TAG=$(curl -s https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/releases/latest | jq -r .tag_name)
+            echo "RELEASE_TAG=$LATEST_TAG" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check if image already exists
+        id: check-tag
+        run: |
+          # Check GHCR to see if we already built this tag to prevent infinite loops/waste
+          TOKEN=$(echo "${{ secrets.GITHUB_TOKEN }}" | base64)
+          RESPONSE=$(curl -s -o /dev/null -I -w "%{http_code}" \
+            -H "Authorization: Bearer $TOKEN" \
+            https://ghcr.io/v2/${{ env.IMAGE_NAME }}/manifests/${{ steps.upstream.outputs.RELEASE_TAG }})
+          
+          if [ "$RESPONSE" = "200" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag ${{ steps.upstream.outputs.RELEASE_TAG }} already exists in registry. Skipping."
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+          
       - name: Checkout super-productivity at ref
+        if: steps.check-tag.outputs.exists == 'false'
         uses: actions/checkout@v4
         with:
           repository: ${{ env.UPSTREAM_REPO }}
           ref: ${{ inputs.ref }}
 
       - name: Inject baseline Prisma migration
+        if: steps.check-tag.outputs.exists == 'false'
         run: |
           # The super-sync-server was bootstrapped with `prisma db push`, so there is no
           # initial CREATE TABLE migration. Without this baseline, `prisma migrate deploy`
@@ -122,6 +153,7 @@ jobs:
           SQLEOF
 
       - name: Compute image tags
+        if: steps.check-tag.outputs.exists == 'false'
         id: tags
         run: |
           REF="${{ inputs.ref }}"
@@ -134,9 +166,11 @@ jobs:
           fi
 
       - name: Set up Docker Buildx
+        if: steps.check-tag.outputs.exists == 'false'
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to Container Registry
+        if: steps.check-tag.outputs.exists == 'false'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -144,6 +178,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push Docker image
+        if: steps.check-tag.outputs.exists == 'false'
         id: push
         uses: docker/build-push-action@v6
         with:
@@ -163,6 +198,7 @@ jobs:
           provenance: false
 
       - name: Generate artifact attestation
+        if: steps.check-tag.outputs.exists == 'false'
         uses: actions/attest-build-provenance@v1
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
@@ -170,6 +206,7 @@ jobs:
           push-to-registry: true
 
       - name: Output image details
+        if: steps.check-tag.outputs.exists == 'false'
         run: |
           echo "Image pushed to: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
           echo "Tags: ${{ steps.tags.outputs.tags }}"
