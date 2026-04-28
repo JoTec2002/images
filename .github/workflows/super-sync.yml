@@ -25,6 +25,9 @@ jobs:
       id-token: write
 
     steps:
+      - name: Set Lowercase Image Name
+        run: |
+          echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}/super-sync" >> $GITHUB_ENV
       - name: Get Latest Upstream Release
         id: upstream
         run: |
