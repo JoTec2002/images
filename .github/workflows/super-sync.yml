@@ -35,6 +35,7 @@ jobs:
             LATEST_TAG=$(curl -s https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/releases/latest | jq -r .tag_name)
             echo "RELEASE_TAG=$LATEST_TAG" >> $GITHUB_OUTPUT
           fi
+          echo "Detected Tag: $LATEST_TAG"
 
       - name: Check if image already exists
         id: check-tag
