@@ -157,7 +157,7 @@ jobs:
         if: steps.check-tag.outputs.exists == 'false'
         id: tags
         run: |
-          REF="${{ inputs.ref }}"
+          REF="${{ steps.upstream.outputs.RELEASE_TAG }}"
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
           # If ref looks like a version tag (starts with v followed by a digit), also tag latest
           if echo "$REF" | grep -qE '^v[0-9]'; then
