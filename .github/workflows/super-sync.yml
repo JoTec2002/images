@@ -163,6 +163,7 @@ jobs:
           SQLEOF
 
       - name: Enable migrations on startup
+        if: steps.check-tag.outputs.exists == 'false'
         run: |
           sed -i 's/ENV RUN_MIGRATIONS_ON_STARTUP=false/ENV RUN_MIGRATIONS_ON_STARTUP=true/' \
             packages/super-sync-server/Dockerfile
